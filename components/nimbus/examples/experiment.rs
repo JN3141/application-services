@@ -283,7 +283,8 @@ fn main() -> Result<()> {
                 let uuid = uuid::Uuid::new_v4();
                 let mut num_of_experiments_enrolled = 0;
                 for exp in &all_experiments {
-                    let enr = nimbus::evaluate_enrollment(&uuid, &aru, &context.clone(), &exp)?;
+                    let enr =
+                        nimbus::evaluate_enrollment(&uuid, &aru, &context.clone(), &exp, None)?;
                     if enr.status.is_enrolled() {
                         num_of_experiments_enrolled += 1;
                         if num_of_experiments_enrolled >= num {
@@ -337,7 +338,8 @@ fn main() -> Result<()> {
                 // options.
                 let uuid = uuid::Uuid::new_v4();
                 let aru = AvailableRandomizationUnits::with_client_id(&client_id);
-                let enrollment = nimbus::evaluate_enrollment(&uuid, &aru, &context.clone(), &exp)?;
+                let enrollment =
+                    nimbus::evaluate_enrollment(&uuid, &aru, &context.clone(), &exp, None)?;
                 let key = match enrollment.status.clone() {
                     EnrollmentStatus::Enrolled { .. } => "Enrolled",
                     EnrollmentStatus::NotEnrolled { .. } => "NotEnrolled",

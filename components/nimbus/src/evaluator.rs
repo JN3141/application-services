@@ -25,6 +25,13 @@ impl Bucket {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct TargetingAttributes {
+    #[serde(flatten)]
+    app_context: AppContext,
+    is_already_enrolled: bool,
+}
+
 /// Determine the enrolment status for an experiment.
 ///
 /// # Arguments:
@@ -48,6 +55,7 @@ pub fn evaluate_enrollment(
     available_randomization_units: &AvailableRandomizationUnits,
     app_context: &AppContext,
     exp: &Experiment,
+    previous_enrollment: Option<&EnrollmentStatus>,
 ) -> Result<ExperimentEnrollment> {
     if !is_experiment_available(app_context, exp, true) {
         return Ok(ExperimentEnrollment {
@@ -58,10 +66,20 @@ pub fn evaluate_enrollment(
         });
     }
 
+    let is_already_enrolled = if let Some(status) = previous_enrollment {
+        status.is_enrolled()
+    } else {
+        false
+    };
+
     // Get targeting out of the way - "if let chains" are experimental,
     // otherwise we could improve this.
     if let Some(expr) = &exp.targeting {
-        if let Some(status) = targeting(expr, app_context) {
+        let targeting_attributes = TargetingAttributes {
+            app_context: app_context.clone(),
+            is_already_enrolled,
+        };
+        if let Some(status) = targeting(expr, &targeting_attributes) {
             return Ok(ExperimentEnrollment {
                 slug: exp.slug.clone(),
                 status,
@@ -206,8 +224,11 @@ fn choose_branch<'a>(slug: &str, branches: &'a [Branch], id: &str) -> Result<&'a
 /// - The `expression_statement` expects fields that do not exist in the AppContext definition
 /// - The result of evaluating the statement against the context is not a boolean
 /// - jexl-rs returned an error
-fn targeting(expression_statement: &str, ctx: &AppContext) -> Option<EnrollmentStatus> {
-    match Evaluator::new().eval_in_context(expression_statement, ctx.clone()) {
+fn targeting(
+    expression_statement: &str,
+    targeting_attributes: &TargetingAttributes,
+) -> Option<EnrollmentStatus> {
+    match Evaluator::new().eval_in_context(expression_statement, targeting_attributes) {
         Ok(res) => match res.as_bool() {
             Some(true) => None,
             Some(false) => Some(EnrollmentStatus::NotEnrolled {
@@ -235,86 +256,98 @@ mod tests {
             "app_id == '1010' && (app_version == '4.4' || locale == \"en-US\")";
 
         // A matching context testing the logical AND + OR of the expression
-        let ctx = AppContext {
-            app_name: "nimbus_test".to_string(),
-            app_id: "1010".to_string(),
-            channel: "test".to_string(),
-            app_version: Some("4.4".to_string()),
-            app_build: Some("1234".to_string()),
-            architecture: Some("x86_64".to_string()),
-            device_manufacturer: Some("Samsung".to_string()),
-            device_model: Some("Galaxy S10".to_string()),
-            locale: Some("en-US".to_string()),
-            os: Some("Android".to_string()),
-            os_version: Some("10".to_string()),
-            android_sdk_version: Some("29".to_string()),
-            debug_tag: None,
-            custom_targeting_attributes: None,
+        let targeting_attributes = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "nimbus_test".to_string(),
+                app_id: "1010".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.4".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("en-US".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: None,
+            },
+            ..Default::default()
         };
-        assert_eq!(targeting(expression_statement, &ctx), None);
+        assert_eq!(targeting(expression_statement, &targeting_attributes), None);
 
         // A matching context testing the logical OR of the expression
-        let ctx = AppContext {
-            app_name: "nimbus_test".to_string(),
-            app_id: "1010".to_string(),
-            channel: "test".to_string(),
-            app_version: Some("4.4".to_string()),
-            app_build: Some("1234".to_string()),
-            architecture: Some("x86_64".to_string()),
-            device_manufacturer: Some("Samsung".to_string()),
-            device_model: Some("Galaxy S10".to_string()),
-            locale: Some("de-DE".to_string()),
-            os: Some("Android".to_string()),
-            os_version: Some("10".to_string()),
-            android_sdk_version: Some("29".to_string()),
-            debug_tag: None,
-            custom_targeting_attributes: None,
+        let targeting_attributes = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "nimbus_test".to_string(),
+                app_id: "1010".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.4".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("de-DE".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: None,
+            },
+            ..Default::default()
         };
-        assert_eq!(targeting(expression_statement, &ctx), None);
+        assert_eq!(targeting(expression_statement, &targeting_attributes), None);
 
         // A non-matching context testing the logical AND of the expression
-        let non_matching_ctx = AppContext {
-            app_name: "not_nimbus_test".to_string(),
-            app_id: "org.example.app".to_string(),
-            channel: "test".to_string(),
-            app_version: Some("4.4".to_string()),
-            app_build: Some("1234".to_string()),
-            architecture: Some("x86_64".to_string()),
-            device_manufacturer: Some("Samsung".to_string()),
-            device_model: Some("Galaxy S10".to_string()),
-            locale: Some("en-US".to_string()),
-            os: Some("Android".to_string()),
-            os_version: Some("10".to_string()),
-            android_sdk_version: Some("29".to_string()),
-            debug_tag: None,
-            custom_targeting_attributes: None,
+        let non_matching_targeting = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "not_nimbus_test".to_string(),
+                app_id: "org.example.app".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.4".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("en-US".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: None,
+            },
+            ..Default::default()
         };
         assert!(matches!(
-            targeting(expression_statement, &non_matching_ctx),
+            targeting(expression_statement, &non_matching_targeting),
             Some(EnrollmentStatus::NotEnrolled {
                 reason: NotEnrolledReason::NotTargeted
             })
         ));
 
         // A non-matching context testing the logical OR of the expression
-        let non_matching_ctx = AppContext {
-            app_name: "not_nimbus_test".to_string(),
-            app_id: "org.example.app".to_string(),
-            channel: "test".to_string(),
-            app_version: Some("4.5".to_string()),
-            app_build: Some("1234".to_string()),
-            architecture: Some("x86_64".to_string()),
-            device_manufacturer: Some("Samsung".to_string()),
-            device_model: Some("Galaxy S10".to_string()),
-            locale: Some("de-DE".to_string()),
-            os: Some("Android".to_string()),
-            os_version: Some("10".to_string()),
-            android_sdk_version: Some("29".to_string()),
-            debug_tag: None,
-            custom_targeting_attributes: None,
+        let non_matching_targeting = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "not_nimbus_test".to_string(),
+                app_id: "org.example.app".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.5".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("de-DE".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: None,
+            },
+            ..Default::default()
         };
         assert!(matches!(
-            targeting(expression_statement, &non_matching_ctx),
+            targeting(expression_statement, &non_matching_targeting),
             Some(EnrollmentStatus::NotEnrolled {
                 reason: NotEnrolledReason::NotTargeted
             })
@@ -332,43 +365,49 @@ mod tests {
         custom_targeting_attributes.insert("is_first_run".into(), "true".into());
         custom_targeting_attributes.insert("ios_version".into(), "8.8".into());
         // A matching context that includes the appropriate specific context
-        let ctx = AppContext {
-            app_name: "nimbus_test".to_string(),
-            app_id: "1010".to_string(),
-            channel: "test".to_string(),
-            app_version: Some("4.4".to_string()),
-            app_build: Some("1234".to_string()),
-            architecture: Some("x86_64".to_string()),
-            device_manufacturer: Some("Samsung".to_string()),
-            device_model: Some("Galaxy S10".to_string()),
-            locale: Some("en-US".to_string()),
-            os: Some("Android".to_string()),
-            os_version: Some("10".to_string()),
-            android_sdk_version: Some("29".to_string()),
-            debug_tag: None,
-            custom_targeting_attributes: Some(custom_targeting_attributes),
+        let targeting_attributes = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "nimbus_test".to_string(),
+                app_id: "1010".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.4".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("en-US".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: Some(custom_targeting_attributes),
+            },
+            ..Default::default()
         };
-        assert_eq!(targeting(expression_statement, &ctx), None);
+        assert_eq!(targeting(expression_statement, &targeting_attributes), None);
 
         // A matching context without the specific context
-        let ctx = AppContext {
-            app_name: "nimbus_test".to_string(),
-            app_id: "1010".to_string(),
-            channel: "test".to_string(),
-            app_version: Some("4.4".to_string()),
-            app_build: Some("1234".to_string()),
-            architecture: Some("x86_64".to_string()),
-            device_manufacturer: Some("Samsung".to_string()),
-            device_model: Some("Galaxy S10".to_string()),
-            locale: Some("en-US".to_string()),
-            os: Some("Android".to_string()),
-            os_version: Some("10".to_string()),
-            android_sdk_version: Some("29".to_string()),
-            debug_tag: None,
-            custom_targeting_attributes: None,
+        let targeting_attributes = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "nimbus_test".to_string(),
+                app_id: "1010".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.4".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("en-US".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: None,
+            },
+            ..Default::default()
         };
         assert!(matches!(
-            targeting(expression_statement, &ctx),
+            targeting(expression_statement, &targeting_attributes),
             Some(EnrollmentStatus::Error { .. })
         ));
     }
@@ -536,7 +575,7 @@ mod tests {
         let id = uuid::Uuid::new_v4();
 
         let enrollment =
-            evaluate_enrollment(&id, &Default::default(), &context, &experiment).unwrap();
+            evaluate_enrollment(&id, &Default::default(), &context, &experiment, None).unwrap();
         println!("Uh oh!  {:#?}", enrollment.status);
         assert!(matches!(
             enrollment.status,
@@ -552,7 +591,7 @@ mod tests {
 
         // Now we will be enrolled in the experiment because we have the right channel, but with different capitalization
         let enrollment =
-            evaluate_enrollment(&id, &Default::default(), &context, &experiment).unwrap();
+            evaluate_enrollment(&id, &Default::default(), &context, &experiment, None).unwrap();
         assert!(matches!(
             enrollment.status,
             EnrollmentStatus::Enrolled {
@@ -614,6 +653,7 @@ mod tests {
             &Default::default(),
             &context,
             &experiment,
+            None,
         )
         .unwrap();
         // The status should be `Error`
@@ -622,9 +662,14 @@ mod tests {
         // Fits because of the client_id.
         let available_randomization_units = AvailableRandomizationUnits::with_client_id("bobo");
         let id = uuid::Uuid::parse_str("542213c0-9aef-47eb-bc6b-3b8529736ba2").unwrap();
-        let enrollment =
-            evaluate_enrollment(&id, &available_randomization_units, &context, &experiment)
-                .unwrap();
+        let enrollment = evaluate_enrollment(
+            &id,
+            &available_randomization_units,
+            &context,
+            &experiment,
+            None,
+        )
+        .unwrap();
         assert!(matches!(
             enrollment.status,
             EnrollmentStatus::Enrolled {
@@ -682,7 +727,7 @@ mod tests {
 
         // We won't be enrolled in the experiment because we don't have the right app_name
         let enrollment =
-            evaluate_enrollment(&id, &Default::default(), &context, &experiment).unwrap();
+            evaluate_enrollment(&id, &Default::default(), &context, &experiment, None).unwrap();
         assert!(matches!(
             enrollment.status,
             EnrollmentStatus::NotEnrolled {
@@ -697,7 +742,7 @@ mod tests {
         // Now we won't be enrolled in the experiment because we don't have the right channel, but with the same
         // `NotTargeted` reason
         let enrollment =
-            evaluate_enrollment(&id, &Default::default(), &context, &experiment).unwrap();
+            evaluate_enrollment(&id, &Default::default(), &context, &experiment, None).unwrap();
         assert!(matches!(
             enrollment.status,
             EnrollmentStatus::NotEnrolled {
@@ -741,9 +786,14 @@ mod tests {
             ..Default::default()
         };
 
-        let enrollment =
-            evaluate_enrollment(&id, &available_randomization_units, &context, &experiment)
-                .unwrap();
+        let enrollment = evaluate_enrollment(
+            &id,
+            &available_randomization_units,
+            &context,
+            &experiment,
+            None,
+        )
+        .unwrap();
         assert!(matches!(
             enrollment.status,
             EnrollmentStatus::Enrolled {

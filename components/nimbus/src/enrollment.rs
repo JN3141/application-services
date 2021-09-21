@@ -103,6 +103,7 @@ impl ExperimentEnrollment {
                 available_randomization_units,
                 app_context,
                 experiment,
+                None,
             )?;
             log::debug!(
                 "Experiment '{}' is new - enrollment status is {:?}",
@@ -156,6 +157,7 @@ impl ExperimentEnrollment {
                         available_randomization_units,
                         app_context,
                         updated_experiment,
+                        Some(&self.status),
                     )?;
                     log::debug!(
                         "Experiment '{}' with enrollment {:?} is now {:?}",
@@ -199,6 +201,7 @@ impl ExperimentEnrollment {
                         available_randomization_units,
                         app_context,
                         updated_experiment,
+                        Some(&self.status),
                     )?;
                     match evaluated_enrollment.status {
                         EnrollmentStatus::Error { .. } => {
@@ -477,7 +480,6 @@ impl EnrollmentStatus {
 
     // This is used in examples, but not in the main dylib, and
     // triggers a dead code warning when building with `--release`.
-    #[allow(dead_code)]
     pub fn is_enrolled(&self) -> bool {
         matches!(self, EnrollmentStatus::Enrolled { .. })
     }
