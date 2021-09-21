@@ -413,6 +413,62 @@ mod tests {
     }
 
     #[test]
+    fn test_targeting_is_already_enrolled() {
+        // Here's our valid jexl statement
+        let expression_statement = "is_already_enrolled";
+        // A matching context that includes the appropriate specific context
+        let targeting_attributes = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "nimbus_test".to_string(),
+                app_id: "1010".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.4".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("en-US".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: None,
+            },
+            is_already_enrolled: true,
+        };
+
+        // The targeting should pass!
+        assert_eq!(targeting(expression_statement, &targeting_attributes), None);
+
+        // We make the is_already_enrolled false and try again
+        let targeting_attributes = TargetingAttributes {
+            app_context: AppContext {
+                app_name: "nimbus_test".to_string(),
+                app_id: "1010".to_string(),
+                channel: "test".to_string(),
+                app_version: Some("4.4".to_string()),
+                app_build: Some("1234".to_string()),
+                architecture: Some("x86_64".to_string()),
+                device_manufacturer: Some("Samsung".to_string()),
+                device_model: Some("Galaxy S10".to_string()),
+                locale: Some("en-US".to_string()),
+                os: Some("Android".to_string()),
+                os_version: Some("10".to_string()),
+                android_sdk_version: Some("29".to_string()),
+                debug_tag: None,
+                custom_targeting_attributes: None,
+            },
+            is_already_enrolled: false,
+        };
+        assert_eq!(
+            targeting(expression_statement, &targeting_attributes),
+            Some(EnrollmentStatus::NotEnrolled {
+                reason: NotEnrolledReason::NotTargeted
+            })
+        );
+    }
+
+    #[test]
     fn test_invalid_expression() {
         // This expression doesn't return a bool
         let expression_statement = "2.0";
@@ -743,6 +799,104 @@ mod tests {
         // `NotTargeted` reason
         let enrollment =
             evaluate_enrollment(&id, &Default::default(), &context, &experiment, None).unwrap();
+        assert!(matches!(
+            enrollment.status,
+            EnrollmentStatus::NotEnrolled {
+                reason: NotEnrolledReason::NotTargeted
+            }
+        ));
+    }
+
+    #[test]
+    fn test_enrollment_with_already_enrolled_targeting() {
+        // In this test, we test an experiment that targets users who are already
+        // enrolled in it.
+        let experiment = Experiment {
+            app_name: Some("NimbusTest".to_string()),
+            app_id: Some("org.example.app".to_string()),
+            channel: Some("nightly".to_string()),
+            schema_version: "1.0.0".to_string(),
+            slug: "TEST_EXP2".to_string(),
+            is_enrollment_paused: false,
+            feature_ids: vec!["test-feature".to_string()],
+            bucket_config: BucketConfig {
+                randomization_unit: RandomizationUnit::NimbusId,
+                start: 0,
+                count: 10000,
+                total: 10000,
+                ..Default::default()
+            },
+            branches: vec![
+                Branch {
+                    slug: "control".to_string(),
+                    ratio: 1,
+                    feature: None,
+                    features: None,
+                },
+                Branch {
+                    slug: "blue".to_string(),
+                    ratio: 1,
+                    feature: None,
+                    features: None,
+                },
+            ],
+            targeting: Some("is_targeted == 'true' || is_already_enrolled".into()),
+            reference_branch: Some("control".to_string()),
+            ..Default::default()
+        };
+        let id = uuid::Uuid::new_v4();
+
+        // We create a context with `is_targeted` == 'true' custom targeting attribute
+        // so we get enrolled without having `is_already_enrolled` set yet
+        let mut custom_targeting_attributes = HashMap::new();
+        custom_targeting_attributes.insert("is_targeted".into(), "true".into());
+        let mut context = AppContext {
+            app_name: "NimbusTest".to_string(),
+            channel: "nightly".to_string(),
+            custom_targeting_attributes: Some(custom_targeting_attributes.clone()),
+            ..Default::default()
+        };
+        // We should be enrolled in this experiment, since we match the targeting
+        let enrollment =
+            evaluate_enrollment(&id, &Default::default(), &context, &experiment, None).unwrap();
+        assert!(matches!(
+            enrollment.status,
+            EnrollmentStatus::Enrolled { .. }
+        ));
+
+        // we now set the `is_targeted` to false, so that we use the `is_already_enrolled` to determine if the
+        // user is targeted by this experiment
+        custom_targeting_attributes.insert("is_targeted".into(), "false".into());
+        context.custom_targeting_attributes = Some(custom_targeting_attributes);
+
+        // We should be enrolled again in this experiment, since we got enrolled previously, and the targeting statement
+        // had is_already_enrolled in it
+        let enrollment = evaluate_enrollment(
+            &id,
+            &Default::default(),
+            &context,
+            &experiment,
+            Some(&enrollment.status),
+        )
+        .unwrap();
+        assert!(matches!(
+            enrollment.status,
+            EnrollmentStatus::Enrolled { .. }
+        ));
+
+        // Finally, we verify that if we pass any other status, we would not get enrolled again
+        // We should be enrolled again in this experiment, since we got enrolled previously, and the targeting statement
+        // had is_already_enrolled in it
+        let enrollment = evaluate_enrollment(
+            &id,
+            &Default::default(),
+            &context,
+            &experiment,
+            Some(&EnrollmentStatus::Error {
+                reason: "Bobo".into(),
+            }),
+        )
+        .unwrap();
         assert!(matches!(
             enrollment.status,
             EnrollmentStatus::NotEnrolled {
