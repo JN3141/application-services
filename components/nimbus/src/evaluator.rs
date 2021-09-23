@@ -250,6 +250,8 @@ mod tests {
             android_sdk_version: Some("29".to_string()),
             debug_tag: None,
             custom_targeting_attributes: None,
+            days_since_install: None,
+            ..Default::default()
         };
         assert_eq!(targeting(expression_statement, &ctx), None);
 
@@ -269,6 +271,7 @@ mod tests {
             android_sdk_version: Some("29".to_string()),
             debug_tag: None,
             custom_targeting_attributes: None,
+            ..Default::default()
         };
         assert_eq!(targeting(expression_statement, &ctx), None);
 
@@ -288,6 +291,7 @@ mod tests {
             android_sdk_version: Some("29".to_string()),
             debug_tag: None,
             custom_targeting_attributes: None,
+            ..Default::default()
         };
         assert!(matches!(
             targeting(expression_statement, &non_matching_ctx),
@@ -312,6 +316,7 @@ mod tests {
             android_sdk_version: Some("29".to_string()),
             debug_tag: None,
             custom_targeting_attributes: None,
+            ..Default::default()
         };
         assert!(matches!(
             targeting(expression_statement, &non_matching_ctx),
@@ -347,6 +352,7 @@ mod tests {
             android_sdk_version: Some("29".to_string()),
             debug_tag: None,
             custom_targeting_attributes: Some(custom_targeting_attributes),
+            ..Default::default()
         };
         assert_eq!(targeting(expression_statement, &ctx), None);
 
@@ -366,6 +372,7 @@ mod tests {
             android_sdk_version: Some("29".to_string()),
             debug_tag: None,
             custom_targeting_attributes: None,
+            ..Default::default()
         };
         assert!(matches!(
             targeting(expression_statement, &ctx),

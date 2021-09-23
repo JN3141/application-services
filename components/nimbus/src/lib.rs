@@ -6,6 +6,7 @@ mod dbcache;
 mod enrollment;
 pub mod error;
 mod evaluator;
+use chrono::{DateTime, Utc};
 pub use error::{NimbusError, Result};
 mod client;
 mod config;
@@ -36,15 +37,15 @@ use once_cell::sync::OnceCell;
 use persistence::{Database, StoreId, Writer};
 use serde_derive::*;
 use serde_json::{Map, Value};
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::{collections::HashSet, str::FromStr};
 use updating::{read_and_remove_pending_experiments, write_pending_experiments};
 use uuid::Uuid;
 
 const DEFAULT_TOTAL_BUCKETS: u32 = 10000;
 const DB_KEY_NIMBUS_ID: &str = "nimbus-id";
-
+pub const DB_KEY_INSTALLATION_DATE: &str = "installation-date";
 // The main `NimbusClient` struct must not expose any methods that make an `&mut self`,
 // in order to be compatible with the uniffi's requirements on objects. This is a helper
 // struct to contain the bits that do actually need to be mutable, so they can be
@@ -52,6 +53,7 @@ const DB_KEY_NIMBUS_ID: &str = "nimbus-id";
 #[derive(Default)]
 struct InternalMutableState {
     available_randomization_units: AvailableRandomizationUnits,
+    app_context: AppContext,
 }
 
 /// Nimbus is the main struct representing the experiments state
@@ -60,7 +62,6 @@ struct InternalMutableState {
 pub struct NimbusClient {
     settings_client: Mutex<Box<dyn SettingsClient + Send>>,
     mutable_state: Mutex<InternalMutableState>,
-    app_context: AppContext,
     db: OnceCell<Database>,
     // Manages an in-memory cache so that we can answer certain requests
     // without doing (or waiting for) IO.
@@ -78,13 +79,14 @@ impl NimbusClient {
         available_randomization_units: AvailableRandomizationUnits,
     ) -> Result<Self> {
         let settings_client = Mutex::new(create_client(config)?);
+
         let mutable_state = Mutex::new(InternalMutableState {
             available_randomization_units,
+            app_context,
         });
         Ok(Self {
             settings_client,
             mutable_state,
-            app_context,
             database_cache: Default::default(),
             db_path: db_path.into(),
             db: OnceCell::default(),
@@ -140,7 +142,7 @@ impl NimbusClient {
         let evolver = EnrollmentsEvolver::new(
             &nimbus_id,
             &state.available_randomization_units,
-            &self.app_context,
+            &state.app_context,
         );
         let events = evolver.evolve_enrollments_in_db(db, &mut writer, &existing_experiments)?;
         self.database_cache.commit_and_update(db, writer)?;
@@ -161,10 +163,11 @@ impl NimbusClient {
     }
 
     pub fn get_available_experiments(&self) -> Result<Vec<AvailableExperiment>> {
+        let state = self.mutable_state.lock().unwrap();
         Ok(self
             .get_all_experiments()?
             .into_iter()
-            .filter(|exp| is_experiment_available(&self.app_context, exp, false))
+            .filter(|exp| is_experiment_available(&state.app_context, exp, false))
             .map(|exp| exp.into())
             .collect())
     }
@@ -207,17 +210,40 @@ impl NimbusClient {
 
     pub fn apply_pending_experiments(&self) -> Result<Vec<EnrollmentChangeEvent>> {
         log::info!("updating experiment list");
+        // If the application did not pass in an installation date,
+        // we check if we already persisted one on a previous run:
+
+        let mut state = self.mutable_state.lock().unwrap();
+
+        let installation_date =
+            if let Some(installation_date) = &state.app_context.installation_date {
+                DateTime::<Utc>::from_str(installation_date)?
+            } else {
+                let persisted_installation_date = self.get_installation_date_from_database()?;
+                // if we never persisted an installation date before, we will get the installation
+                // date by inspecting the database path
+                if let Some(installation_date) = persisted_installation_date {
+                    installation_date
+                } else {
+                    self.get_installation_date_from_database_path()?
+                }
+            };
+        let diff = Utc::now() - installation_date;
+        state.app_context.days_since_install = Some(diff.num_days());
+
         let db = self.db()?;
         let mut writer = db.write()?;
+        let store = db.get_store(StoreId::Meta);
+        store.put(&mut writer, DB_KEY_INSTALLATION_DATE, &installation_date)?;
+
         let pending_updates = read_and_remove_pending_experiments(db, &mut writer)?;
         Ok(match pending_updates {
             Some(new_experiments) => {
                 let nimbus_id = self.read_or_create_nimbus_id(db, &mut writer)?;
-                let state = self.mutable_state.lock().unwrap();
                 let evolver = EnrollmentsEvolver::new(
                     &nimbus_id,
                     &state.available_randomization_units,
-                    &self.app_context,
+                    &state.app_context,
                 );
                 let events = evolver.evolve_enrollments_in_db(db, &mut writer, &new_experiments)?;
                 self.database_cache.commit_and_update(db, writer)?;
@@ -226,6 +252,21 @@ impl NimbusClient {
             // We don't need to writer.commit() here because we haven't done anything.
             None => vec![],
         })
+    }
+
+    fn get_installation_date_from_database(&self) -> Result<Option<DateTime<Utc>>> {
+        let db = self.db()?;
+        let reader = db.read()?;
+        let store = db.get_store(StoreId::Meta);
+        store.get(&reader, DB_KEY_INSTALLATION_DATE)
+    }
+
+    fn get_installation_date_from_database_path(&self) -> Result<DateTime<Utc>> {
+        let file = std::fs::File::open(&self.db_path)?;
+        let metadata = file.metadata()?;
+        let system_time_created = metadata.created()?;
+        let date_time_created = DateTime::<Utc>::from(system_time_created);
+        Ok(date_time_created)
     }
 
     pub fn set_experiments_locally(&self, experiments_json: String) -> Result<()> {

@@ -13,6 +13,8 @@ dictionary AppContext {
     string? os_version;
     string? android_sdk_version;
     string? debug_tag;
+    i64? days_since_install = null;
+    string? installation_date;
     record<DOMString, string>? custom_targeting_attributes;
 };
 
@@ -72,7 +74,7 @@ enum NimbusError {
     "TryFromSliceError", "EmptyRatiosError", "OutOfBoundsError","UrlParsingError",
     "RequestError", "ResponseError", "UuidError", "InvalidExperimentFormat",
     "InvalidPath", "InternalError", "NoSuchExperiment", "NoSuchBranch", "BackoffError",
-    "DatabaseNotReady",
+    "DatabaseNotReady", "DateTimeError"
 };
 
 interface NimbusClient {

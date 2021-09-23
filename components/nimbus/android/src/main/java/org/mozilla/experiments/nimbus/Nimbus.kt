@@ -618,6 +618,8 @@ open class Nimbus(
             locale = deviceInfo.localeTag,
             os = "Android",
             osVersion = Build.VERSION.RELEASE,
+            daysSinceInstall = null,
+            installationDate = null,
             customTargetingAttributes = appInfo.customTargetingAttributes)
     }
 }

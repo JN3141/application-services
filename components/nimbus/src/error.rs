@@ -7,6 +7,7 @@
 //! This is where the error definitions can go
 //! TODO: Implement proper error handling, this would include defining the error enum,
 //! impl std::error::Error using `thiserror` and ensuring all errors are handled appropriately
+
 #[derive(Debug, thiserror::Error)]
 pub enum NimbusError {
     #[error("Invalid persisted data")]
@@ -51,6 +52,8 @@ pub enum NimbusError {
     BackoffError(u64),
     #[error("Initialization of the database is not yet complete")]
     DatabaseNotReady,
+    #[error("Error parsing DateTime string: {0}")]
+    DateTimeError(#[from] chrono::ParseError),
 }
 
 impl<'a> From<jexl_eval::error::EvaluationError<'a>> for NimbusError {
